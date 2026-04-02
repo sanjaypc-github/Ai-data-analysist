@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+# Install only essential data science packages
+RUN pip install --no-cache-dir \
+    pandas==2.1.3 \
+    numpy==1.26.2 \
+    matplotlib==3.8.2
+
+# Pre-build matplotlib font cache to avoid initialization delays
+# This fixes the KeyboardInterrupt issue during font loading
+RUN python -c "import matplotlib.pyplot as plt; import matplotlib.font_manager; print('Font cache built')"
+
+# Set matplotlib to use Agg backend (non-interactive) by default
+ENV MPLBACKEND=Agg
+
+# Create working directories
+RUN mkdir -p /scripts /tmp /data
+
+# Set working directory
+WORKDIR /scripts
+
+# Drop to non-root user for extra security
+RUN useradd -m -u 1000 sandbox && chown -R sandbox:sandbox /tmp
+USER sandbox
+
+# Default command (will be overridden)
+CMD ["python"]

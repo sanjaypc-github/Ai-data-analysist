@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ada-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./prompts:/app/prompts
+      - /var/run/docker.sock:/var/run/docker.sock  # For Docker-in-Docker sandbox execution
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ada-sandbox:latest}
+      - DATA_DIR=/app/data
+      - UPLOAD_DIR=/app/data/uploads
+      - TASKS_DIR=/app/data/tasks
+    env_file:
+      - .env
+    networks:
+      - ada-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ada-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - ada-network
+
+networks:
+  ada-network:
+    driver: bridge
