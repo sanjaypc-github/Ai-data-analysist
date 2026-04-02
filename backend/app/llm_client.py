@@ -71,115 +71,324 @@ def _generate_placeholder_code(question: str, dataset_info: dict, enable_visuali
     Generate safe placeholder code for testing
     Returns deterministic, safe pandas code
     """
+    import re
+
     columns = dataset_info.get("columns", [])
-    
-    # Determine if question is about time series, aggregation, or general analysis
-    question_lower = question.lower()
-    
-    # Time-based analysis
-    if any(word in question_lower for word in ["trend", "time", "monthly", "daily", "over time"]):
-        date_col = next((col for col in columns if "date" in col.lower() or "time" in col.lower()), None)
-        
-        if date_col:
-            return f"""import pandas as pd
-import matplotlib.pyplot as plt
+    dtypes = dataset_info.get("dtypes", {})
+    question_lower = (question or "").lower().strip()
 
-# Convert date column to datetime
-df['{date_col}'] = pd.to_datetime(df['{date_col}'], errors='coerce')
+    def _norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
-# Group by month and count records
-df['month'] = df['{date_col}'].dt.to_period('M')
-monthly_data = df.groupby('month').size().reset_index(name='count')
-monthly_data['month'] = monthly_data['month'].astype(str)
+    norm_cols = {col: _norm(col) for col in columns}
 
-# Save results
-monthly_data.to_csv('/tmp/result.csv', index=False)
+    numeric_name_keywords = [
+        "sales",
+        "revenue",
+        "amount",
+        "value",
+        "total",
+        "price",
+        "cost",
+        "profit",
+        "order_value",
+        "quantity",
+        "qty",
+    ]
 
-# Create visualization
-plt.figure(figsize=(12, 6))
-plt.plot(range(len(monthly_data)), monthly_data['count'], marker='o')
-plt.xlabel('Month')
-plt.ylabel('Count')
-plt.title('Monthly Trend Analysis')
-plt.xticks(range(len(monthly_data)), monthly_data['month'], rotation=45, ha='right')
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig('/tmp/plot1.png', dpi=150, bbox_inches='tight')
+    def _is_numeric_like(col: str) -> bool:
+        dt = str(dtypes.get(col, "")).lower()
+        if any(k in dt for k in ["int", "float", "double", "number", "decimal"]):
+            return True
+        cl = col.lower()
+        return any(kw in cl for kw in numeric_name_keywords)
 
-print(f'Trend analysis complete: {{len(monthly_data)}} months analyzed')
-print('Results saved to /tmp/result.csv and /tmp/plot1.png')
+    def _find_col_in_question() -> str | None:
+        q = " " + _norm(question_lower) + " "
+        for col, ncol in norm_cols.items():
+            if not ncol:
+                continue
+            if f" {ncol} " in q:
+                return col
+        return None
+
+    def _pick_numeric_col() -> str | None:
+        numeric = []
+        numeric_like = []
+        for col in columns:
+            dt = str(dtypes.get(col, "")).lower()
+            if any(k in dt for k in ["int", "float", "double", "number", "decimal"]):
+                numeric.append(col)
+            elif any(kw in col.lower() for kw in numeric_name_keywords):
+                numeric_like.append(col)
+        # Heuristic: prefer common value columns
+        preferred_keywords = ["sales", "revenue", "amount", "value", "total", "price", "cost", "profit", "order_value"]
+        for kw in preferred_keywords:
+            for col in numeric:
+                if kw in col.lower():
+                    return col
+            for col in numeric_like:
+                if kw in col.lower():
+                    return col
+        return numeric[0] if numeric else (numeric_like[0] if numeric_like else None)
+
+    def _pick_group_col() -> str | None:
+        # Look for "by <col>" / "per <col>" patterns
+        q = _norm(question_lower)
+        m = re.search(r"\b(by|per)\b\s+([a-z0-9_ ]+)", q)
+        if m:
+            tail = m.group(2)
+            for col, ncol in norm_cols.items():
+                if ncol and ncol in tail:
+                    # If the "by" column is numeric-like, it's probably a metric (e.g., "top products by sales")
+                    if _is_numeric_like(col):
+                        break
+                    return col
+        # Prefer common categorical columns
+        preferred_keywords = ["product", "category", "customer", "name", "type", "region", "city", "state"]
+        for kw in preferred_keywords:
+            for col in columns:
+                if kw in col.lower():
+                    return col
+        # Fallback: first non-numeric
+        non_numeric = []
+        non_numeric_non_metric = []
+        for col in columns:
+            dt = str(dtypes.get(col, "")).lower()
+            if not any(k in dt for k in ["int", "float", "double", "number", "decimal"]):
+                non_numeric.append(col)
+                if not _is_numeric_like(col):
+                    non_numeric_non_metric.append(col)
+        if non_numeric_non_metric:
+            return non_numeric_non_metric[0]
+        if non_numeric:
+            return non_numeric[0]
+        return None
+
+    def _pick_date_col() -> str | None:
+        preferred = ["date", "time", "timestamp", "created", "order_date"]
+        for kw in preferred:
+            for col in columns:
+                if kw in col.lower():
+                    return col
+        return None
+
+    def _parse_top_n() -> int:
+        m = re.search(r"\btop\s+(\d+)\b", question_lower)
+        if m:
+            try:
+                n = int(m.group(1))
+                return max(1, min(n, 50))
+            except Exception:
+                pass
+        return 5
+
+    def _parse_comparison() -> tuple[str, str, float] | None:
+        # Very simple parser: "<col> > 1000" / "greater than 1000" etc.
+        q = question_lower.replace(",", "")
+        op_map = {
+            "greater than": ">",
+            "more than": ">",
+            "less than": "<",
+            "below": "<",
+            "under": "<",
+            "at least": ">=",
+            "at most": "<=",
+        }
+        for phrase, op in op_map.items():
+            if phrase in q:
+                m = re.search(rf"{re.escape(phrase)}\s+(-?\d+(?:\.\d+)?)", q)
+                if m:
+                    val = float(m.group(1))
+                    col = _find_col_in_question() or _pick_numeric_col()
+                    if col:
+                        return col, op, val
+        m = re.search(r"\b([a-zA-Z0-9_]+)\s*(<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)", q)
+        if m:
+            token = _norm(m.group(1))
+            op = m.group(2)
+            val = float(m.group(3))
+            col = None
+            for c, ncol in norm_cols.items():
+                if ncol == token:
+                    col = c
+                    break
+            col = col or _pick_numeric_col()
+            if col:
+                return col, op, val
+        return None
+
+    value_col = _pick_numeric_col()
+    group_col = _pick_group_col()
+    date_col = _pick_date_col()
+    comparison = _parse_comparison()
+
+    wants_trend = any(w in question_lower for w in ["trend", "over time", "monthly", "daily", "by date", "time series"])
+    wants_top = any(w in question_lower for w in ["top", "highest", "most", "best"])
+    wants_sum = any(w in question_lower for w in ["total", "sum"])
+    wants_avg = any(w in question_lower for w in ["average", "avg", "mean"])
+    wants_count = any(w in question_lower for w in ["count", "how many", "number of"])
+
+    # Interpret "top ... by <metric>" as top by sum/avg of that metric when possible
+    if wants_top and not (wants_sum or wants_avg):
+        qn = _norm(question_lower)
+        m = re.search(r"\btop\b\s+\d+\b.*\bby\b\s+([a-z0-9_ ]+)", qn)
+        if m:
+            tail = m.group(1)
+            metric_col = None
+            for col, ncol in norm_cols.items():
+                if ncol and ncol in tail:
+                    metric_col = col
+                    break
+            if metric_col and _is_numeric_like(metric_col):
+                value_col = metric_col
+                wants_sum = True
+
+    if not columns:
+        return """import pandas as pd
+
+print('No columns detected in dataset inspection.')
+df.head(10).to_csv('/tmp/result.csv', index=False)
+print('Saved first 10 rows to /tmp/result.csv')
 """
-    
-    # Top N analysis
-    elif any(word in question_lower for word in ["top", "best", "highest", "most"]):
-        # Find a likely value column (numeric)
-        value_col = next((col for col in columns if any(kw in col.lower() for kw in ["amount", "sales", "revenue", "price", "value", "total"])), columns[0] if columns else "value")
-        group_col = next((col for col in columns if any(kw in col.lower() for kw in ["product", "category", "name", "type", "customer"])), columns[0] if len(columns) > 1 else "category")
-        
+
+    # Build filter clause if requested
+    filter_lines = ""
+    df_name = "df"
+    if comparison and value_col:
+        c, op, val = comparison
+        df_name = "df_filtered"
+        filter_lines = f"""\n# Filter rows based on the question\ndf_filtered = df.copy()\ndf_filtered['{c}'] = pd.to_numeric(df_filtered['{c}'].astype(str).str.replace(',', ''), errors='coerce')\ndf_filtered = df_filtered[df_filtered['{c}'] {op} {val}]\n"""
+
+    # Trend over time
+    if wants_trend and date_col:
+        agg_expr = ".size()"
+        agg_name = "count"
+        if value_col and (wants_sum or wants_avg):
+            agg_expr = f"['{value_col}'].sum()" if wants_sum else f"['{value_col}'].mean()"
+            agg_name = "total" if wants_sum else "average"
+
+        value_convert_lines = ""
+        if value_col and (wants_sum or wants_avg):
+            value_convert_lines = (
+                f"_df['{value_col}'] = pd.to_numeric(_df['{value_col}'].astype(str).str.replace(',', ''), errors='coerce')\n"
+            )
+
+        plot_block = ""
+        if enable_visualization:
+            plot_block = f"""\nimport matplotlib.pyplot as plt\n\nplt.figure(figsize=(12, 6))\nplt.plot(result_df['period'].astype(str), result_df['{agg_name}'], marker='o')\nplt.xticks(rotation=45, ha='right')\nplt.title('Trend over time')\nplt.tight_layout()\nplt.savefig('/tmp/plot1.png', dpi=150, bbox_inches='tight')\nprint('Saved plot to /tmp/plot1.png')\n"""
+
         return f"""import pandas as pd
-import matplotlib.pyplot as plt
+{plot_block if False else ''}
+{filter_lines}
+# Parse date column and aggregate by month
+_df = {df_name}
+{value_convert_lines}
+_df['{date_col}'] = pd.to_datetime(_df['{date_col}'], errors='coerce')
+_df = _df.dropna(subset=['{date_col}'])
+_df['period'] = _df['{date_col}'].dt.to_period('M')
 
-# Find top 5 by aggregation
-if '{value_col}' in df.columns and pd.api.types.is_numeric_dtype(df['{value_col}']):
-    result = df.groupby('{group_col}')['{value_col}'].sum().sort_values(ascending=False).head(5)
-else:
-    # Fallback: count occurrences
-    result = df['{group_col}'].value_counts().head(5)
+result = _df.groupby('period'){agg_expr}
+result_df = result.reset_index(name='{agg_name}')
+result_df['period'] = result_df['period'].astype(str)
 
-# Convert to dataframe
-result_df = pd.DataFrame({{
-    '{group_col}': result.index,
-    'value': result.values
-}})
 result_df.to_csv('/tmp/result.csv', index=False)
+print('Saved results to /tmp/result.csv')
+print(result_df)
+""" + (plot_block if enable_visualization else "")
 
-# Create bar chart
-plt.figure(figsize=(10, 6))
-plt.bar(range(len(result)), result.values)
-plt.xlabel('{group_col}')
-plt.ylabel('Value')
-plt.title('Top 5 Analysis')
-plt.xticks(range(len(result)), result.index, rotation=45, ha='right')
-plt.tight_layout()
-plt.savefig('/tmp/plot1.png', dpi=150, bbox_inches='tight')
+    # Top N
+    if wants_top and group_col:
+        n = _parse_top_n()
+        metric = "count"
+        value_convert_lines = ""
+        if value_col and (wants_sum or wants_avg):
+            value_convert_lines = (
+                f"_df['{value_col}'] = pd.to_numeric(_df['{value_col}'].astype(str).str.replace(',', ''), errors='coerce')\n"
+            )
 
-print(f'Top 5 analysis complete: {{len(result)}} items')
-print('Results saved to /tmp/result.csv and /tmp/plot1.png')
-"""
-    
-    # Default: summary statistics
-    else:
+        if value_col and wants_sum:
+            metric = "total"
+            result_series_expr = (
+                f"_df.groupby('{group_col}', dropna=False)['{value_col}'].sum().sort_values(ascending=False)"
+            )
+        elif value_col and wants_avg:
+            metric = "average"
+            result_series_expr = (
+                f"_df.groupby('{group_col}', dropna=False)['{value_col}'].mean().sort_values(ascending=False)"
+            )
+        else:
+            result_series_expr = f"_df['{group_col}'].value_counts(dropna=False)"
+
+        plot_block = ""
+        if enable_visualization:
+            plot_block = f"""\nimport matplotlib.pyplot as plt\n\nplt.figure(figsize=(10, 6))\nplt.bar(result_df['{group_col}'].astype(str), result_df['{metric}'])\nplt.xticks(rotation=45, ha='right')\nplt.title('Top {n} by {metric}')\nplt.tight_layout()\nplt.savefig('/tmp/plot1.png', dpi=150, bbox_inches='tight')\nprint('Saved plot to /tmp/plot1.png')\n"""
+
         return f"""import pandas as pd
-import matplotlib.pyplot as plt
+{filter_lines}
 
-# Generate summary statistics
-summary = df.describe(include='all').T
-summary.to_csv('/tmp/result.csv')
+_df = {df_name}
+{value_convert_lines}result_series = {result_series_expr}.head({n})
 
-# Create a sample of the first 10 rows
-sample = df.head(10)
-sample.to_csv('/tmp/result.csv', index=False)
+result_df = result_series.reset_index()
+result_df.columns = ['{group_col}', '{metric}']
 
-# Create basic visualization
-numeric_cols = df.select_dtypes(include=['number']).columns[:5]
-if len(numeric_cols) > 0:
-    fig, axes = plt.subplots(1, len(numeric_cols), figsize=(4*len(numeric_cols), 4))
-    if len(numeric_cols) == 1:
-        axes = [axes]
-    
-    for ax, col in zip(axes, numeric_cols):
-        df[col].hist(ax=ax, bins=20)
-        ax.set_title(col)
-        ax.set_xlabel('Value')
-        ax.set_ylabel('Frequency')
-    
-    plt.tight_layout()
-    plt.savefig('/tmp/plot1.png', dpi=150, bbox_inches='tight')
+result_df.to_csv('/tmp/result.csv', index=False)
+print('Saved results to /tmp/result.csv')
+print(result_df)
+""" + (plot_block if enable_visualization else "")
 
-print(f'Dataset analysis complete: {{len(df)}} rows, {{len(df.columns)}} columns')
-print('Results saved to /tmp/result.csv')
-if len(numeric_cols) > 0:
-    print('Visualizations saved to /tmp/plot1.png')
+    # Aggregate / answer
+    if group_col and value_col and (wants_sum or wants_avg):
+        agg_func = "sum" if wants_sum else "mean"
+        metric = "total" if wants_sum else "average"
+        return f"""import pandas as pd
+{filter_lines}
+
+_df = {df_name}
+_df['{value_col}'] = pd.to_numeric(_df['{value_col}'].astype(str).str.replace(',', ''), errors='coerce')
+result_df = _df.groupby('{group_col}', dropna=False)['{value_col}'].{agg_func}().reset_index(name='{metric}')
+result_df = result_df.sort_values('{metric}', ascending=False)
+
+result_df.to_csv('/tmp/result.csv', index=False)
+print('Saved results to /tmp/result.csv')
+print(result_df)
+"""
+
+    if value_col and wants_sum:
+        return f"""import pandas as pd
+{filter_lines}
+
+_df = {df_name}
+_df['{value_col}'] = pd.to_numeric(_df['{value_col}'].astype(str).str.replace(',', ''), errors='coerce')
+total_val = _df['{value_col}'].sum()
+result_df = pd.DataFrame([{{'{value_col}_sum': total_val}}])
+result_df.to_csv('/tmp/result.csv', index=False)
+print('Saved results to /tmp/result.csv')
+print(result_df)
+"""
+
+    if wants_count:
+        return f"""import pandas as pd
+{filter_lines}
+
+_df = {df_name}
+result_df = pd.DataFrame([{{'count': int(len(_df))}}])
+result_df.to_csv('/tmp/result.csv', index=False)
+print('Saved results to /tmp/result.csv')
+print(result_df)
+"""
+
+    # Fallback: return the first 20 rows (still question-aware: filtered if requested)
+    preview_cols = columns[: min(6, len(columns))]
+    return f"""import pandas as pd
+{filter_lines}
+
+_df = {df_name}
+result_df = _df[{preview_cols!r}].head(20)
+result_df.to_csv('/tmp/result.csv', index=False)
+print('Saved results to /tmp/result.csv')
+print(result_df)
 """
 
 
