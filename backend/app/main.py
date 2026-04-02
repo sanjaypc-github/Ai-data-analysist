@@ -17,9 +17,9 @@ try:
 except ImportError:
     logging.warning("python-dotenv not installed, skipping .env file loading")
 
-from app.api import router
-from app.schemas import HealthResponse
-from app.utils import ensure_dirs
+from .api import router
+from .schemas import HealthResponse
+from .utils import ensure_dirs
 
 # Configure logging
 logging.basicConfig(

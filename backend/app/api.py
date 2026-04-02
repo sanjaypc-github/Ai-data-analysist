@@ -9,11 +9,11 @@ import logging
 import uuid
 import traceback
 
-from app.schemas import (
+from .schemas import (
     UploadResponse, AskRequest, AskResponse, TaskStatusResponse,
     ReportResponse, TaskStatus
 )
-from app.utils import (
+from .utils import (
     save_uploaded_file, get_dataset_path, inspect_csv,
     create_task_dir, save_task_metadata, load_task_metadata,
     update_task_status, get_task_output_files
@@ -35,7 +35,7 @@ async def upload_dataset(file: UploadFile = File(...)):
         UploadResponse with dataset_id and metadata
     """
     try:
-        from app.data_validator import analyze_data_quality
+        from .data_validator import analyze_data_quality
         import pandas as pd
         
         # Validate file type
@@ -90,9 +90,9 @@ async def ask_question(request: AskRequest):
     """
     try:
         # Import here to avoid circular dependencies
-        from app.llm_client import generate_code_for_question
-        from app.safety import is_safe_pandas
-        from app.sandbox_runner import run_code_in_sandbox
+        from .llm_client import generate_code_for_question
+        from .safety import is_safe_pandas
+        from .sandbox_runner import run_code_in_sandbox
         
         # Validate dataset exists
         try:
@@ -246,8 +246,8 @@ async def get_report(task_id: str):
         ReportResponse with report availability and path
     """
     try:
-        from app.report_generator import generate_report
-        from app.utils import get_data_dirs
+        from .report_generator import generate_report
+        from .utils import get_data_dirs
         
         # Check if task exists
         metadata = load_task_metadata(task_id)
@@ -294,8 +294,8 @@ async def download_report(task_id: str):
         FileResponse with HTML report
     """
     try:
-        from app.report_generator import generate_report
-        from app.utils import get_data_dirs
+        from .report_generator import generate_report
+        from .utils import get_data_dirs
         
         # Check if task exists
         metadata = load_task_metadata(task_id)
@@ -341,7 +341,7 @@ async def get_task_file(task_id: str, filename: str):
         FileResponse with the requested file
     """
     try:
-        from app.utils import get_data_dirs
+        from .utils import get_data_dirs
         
         # Validate task exists
         dirs = get_data_dirs()
@@ -394,7 +394,7 @@ async def get_data_quality(dataset_id: str):
         Quality report with missing values, duplicates, etc.
     """
     try:
-        from app.data_validator import analyze_data_quality
+        from .data_validator import analyze_data_quality
         import pandas as pd
         
         # Get ORIGINAL dataset path (not preprocessed)
@@ -428,8 +428,8 @@ async def preprocess_dataset(request: dict):
         Preprocessing results with actions performed
     """
     try:
-        from app.data_validator import preprocess_dataframe, analyze_data_quality
-        from app.utils import get_data_dirs
+        from .data_validator import preprocess_dataframe, analyze_data_quality
+        from .utils import get_data_dirs
         import pandas as pd
         
         dataset_id = request.get('dataset_id')

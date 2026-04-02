@@ -24,7 +24,7 @@ def generate_report(task_id: str, metadata: Dict[str, Any]) -> str:
     Returns:
         Path to generated HTML report
     """
-    from app.utils import get_data_dirs
+    from .utils import get_data_dirs
     
     dirs = get_data_dirs()
     task_dir = dirs["tasks"] / task_id
@@ -178,7 +178,7 @@ def generate_simple_html_report(task_id: str, metadata: Dict[str, Any]) -> str:
     Returns:
         Path to HTML report
     """
-    from app.utils import get_data_dirs
+    from .utils import get_data_dirs
     
     dirs = get_data_dirs()
     task_dir = dirs["tasks"] / task_id

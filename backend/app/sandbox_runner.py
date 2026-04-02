@@ -162,7 +162,7 @@ df = pd.read_csv('/data/dataset.csv')
                 logger.info(f"Docker stderr: {stderr[:500]}")
             
             # Copy output files to task directory
-            from app.utils import get_data_dirs
+            from .utils import get_data_dirs
             dirs = get_data_dirs()
             task_output_dir = dirs["tasks"] / task_id / "outputs"
             task_output_dir.mkdir(parents=True, exist_ok=True)
@@ -240,7 +240,7 @@ def run_code_with_rlimit(code: str, dataset_path: str, task_id: str) -> Dict[str
     """
     logger.warning("⚠️ Using rlimit fallback - NOT as secure as Docker!")
     
-    from app.utils import get_data_dirs
+    from .utils import get_data_dirs
     dirs = get_data_dirs()
     task_output_dir = dirs["tasks"] / task_id / "outputs"
     task_output_dir.mkdir(parents=True, exist_ok=True)
