@@ -11,7 +11,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./prompts:/app/prompts
-      - /var/run/docker.sock:/var/run/docker.sock  # For Docker-in-Docker sandbox execution
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock  # For Docker-in-Docker sandbox execution
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}

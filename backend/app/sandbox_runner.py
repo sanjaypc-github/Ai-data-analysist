@@ -294,8 +294,9 @@ df = pd.read_csv(r'{dataset_path}')
                 # CPU time limit (seconds)
                 resource.setrlimit(resource.RLIMIT_CPU, (SANDBOX_TIMEOUT, SANDBOX_TIMEOUT))
                 
-                # Memory limit (256MB)
-                mem_limit = 256 * 1024 * 1024
+                # Memory limit (default 1024MB; configurable)
+                mem_limit_mb = int(os.getenv("SANDBOX_RLIMIT_AS_MB", "1024"))
+                mem_limit = mem_limit_mb * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
                 
                 # File size limit (50MB)
@@ -306,12 +307,22 @@ df = pd.read_csv(r'{dataset_path}')
                 logger.warning(f"Could not set resource limits: {e}")
         
         try:
+            # Prevent numpy/OpenBLAS from trying to spawn many threads in constrained environments
+            child_env = dict(os.environ)
+            child_env.setdefault("OMP_NUM_THREADS", "1")
+            child_env.setdefault("OPENBLAS_NUM_THREADS", "1")
+            child_env.setdefault("MKL_NUM_THREADS", "1")
+            child_env.setdefault("NUMEXPR_NUM_THREADS", "1")
+            child_env.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+            child_env.setdefault("BLIS_NUM_THREADS", "1")
+
             # Execute with limits (Unix-like systems only)
             result = subprocess.run(
                 ["python", str(script_path)],
                 capture_output=True,
                 text=True,
                 timeout=SANDBOX_TIMEOUT + 5,  # Add buffer to timeout
+                env=child_env,
                 preexec_fn=set_limits if os.name != 'nt' else None  # Linux/Mac only
             )
             
